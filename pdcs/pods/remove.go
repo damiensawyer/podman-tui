@@ -31,3 +31,28 @@ func Remove(id string) ([]string, error) {
 
 	return report, nil
 }
+
+// ForceRemove forcefully removes the pod.
+func ForceRemove(id string) ([]string, error) {
+	log.Debug().Msgf("pdcs: podman pod rm --force %s", id)
+
+	var report []string
+
+	conn, err := registry.GetConnection()
+	if err != nil {
+		return report, err
+	}
+
+	options := new(pods.RemoveOptions).WithForce(true)
+	response, err := pods.Remove(conn, id, options)
+	if err != nil {
+		return report, err
+	}
+
+	if response.Err != nil {
+		respData := fmt.Sprintf("error removing %s: %s", response.Id, response.Err.Error())
+		report = append(report, respData)
+	}
+
+	return report, nil
+}

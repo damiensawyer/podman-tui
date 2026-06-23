@@ -34,6 +34,7 @@ var (
 	errNoPodKill    = errors.New("there is no pod to kill")
 	errNoPodInspect = errors.New("there is no pod to display inspect")
 	errNoPodStat    = errors.New("there is no pod to display stats")
+	errNoPodLogs    = errors.New("there is no pod to display logs")
 	errPodRemove    = errors.New("remove error")
 	errPodPrune     = errors.New("prune error")
 )
@@ -90,8 +91,10 @@ func NewPods() *Pods {
 		{"create", "create a new pod"},
 		{"inspect", "display information describing the selected pod"},
 		{"kill", "send SIGTERM signal to containers in the pod"},
+		{"logs", "display logs from all containers in the pod"},
 		{"pause", "pause  the selected pod"},
 		{"prune", "remove all stopped pods and their containers"},
+		{"force-rm", "forcefully remove the selected pod"},
 		{"restart", "restart  the selected pod"},
 		{"rm", "remove the selected pod"},
 		{"start", "start  the selected pod"},
@@ -149,6 +152,8 @@ func NewPods() *Pods {
 			pods.prune()
 		case "rm":
 			pods.remove()
+		case "force-rm":
+			pods.forceRemove()
 		}
 	})
 

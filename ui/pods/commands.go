@@ -8,6 +8,7 @@ import (
 	"github.com/containers/podman-tui/ui/dialogs"
 	"github.com/containers/podman-tui/ui/style"
 	"github.com/containers/podman-tui/ui/utils"
+	"github.com/containers/podman/v5/pkg/domain/entities"
 	"github.com/rs/zerolog/log"
 )
 
@@ -19,6 +20,8 @@ func (p *Pods) runCommand(cmd string) { //nolint:cyclop
 		p.inspect()
 	case "kill":
 		p.kill()
+	case "logs":
+		p.logs()
 	case "pause":
 		p.pause()
 	case utils.PruneCommandLabel:
@@ -26,6 +29,8 @@ func (p *Pods) runCommand(cmd string) { //nolint:cyclop
 		p.confirmData = utils.PruneCommandLabel
 		p.confirmDialog.SetText("Are you sure you want to remove all stopped pods ?")
 		p.confirmDialog.Display()
+	case "force-rm":
+		p.forceRm()
 	case "restart":
 		p.restart()
 	case "rm":
@@ -83,6 +88,89 @@ func (p *Pods) create() {
 	}
 
 	go createFunc()
+}
+
+func (p *Pods) logs() {
+	if p.selectedID == "" {
+		p.displayError("", errNoPodLogs)
+
+		return
+	}
+
+	podID, podName := p.getSelectedItem()
+	data := p.getData()
+
+	var podInfo *entities.ListPodsReport
+	for _, item := range data {
+		if item.Id == p.selectedID || item.Name == podName {
+			podInfo = item
+			break
+		}
+	}
+
+	if podInfo == nil {
+		p.displayError("", errNoPodLogs)
+
+		return
+	}
+
+	p.progressDialog.SetTitle("pod logs in progress")
+	p.progressDialog.Display()
+
+	getLogs := func() {
+		logData, err := ppods.Logs(p.selectedID, podInfo)
+
+		p.progressDialog.Hide()
+
+		if err != nil {
+			title := fmt.Sprintf("POD (%s) LOGS ERROR", podID)
+			p.displayError(title, err)
+			p.appFocusHandler()
+
+			return
+		}
+
+		if len(logData) == 0 {
+			p.messageDialog.SetTitle("podman pod logs")
+			headerLabel := fmt.Sprintf("%12s (%s)", podID, podName)
+			p.messageDialog.SetText(dialogs.MessagePodInfo, headerLabel, "No logs available for this pod.")
+			p.messageDialog.Display()
+
+			return
+		}
+
+		logsOutput := strings.Join(logData, "\n")
+		logsOutput = strings.ReplaceAll(logsOutput, "[", "")
+		logsOutput = strings.ReplaceAll(logsOutput, "]", "")
+
+		p.messageDialog.SetTitle("podman pod logs")
+		headerLabel := fmt.Sprintf("%12s (%s)", podID, podName)
+		p.messageDialog.SetText(dialogs.MessagePodInfo, headerLabel, logsOutput)
+		p.messageDialog.Display()
+	}
+
+	go getLogs()
+}
+
+func (p *Pods) forceRm() {
+	podID, podName := p.getSelectedItem()
+	if podID == "" {
+		p.displayError("", errNoPodRemove)
+
+		return
+	}
+
+	p.confirmDialog.SetTitle("podman pod force-rm")
+
+	p.confirmData = "force-rm"
+	bgColor := style.GetColorHex(style.DialogBorderColor)
+	fgColor := style.GetColorHex(style.DialogFgColor)
+	podItem := fmt.Sprintf("[%s:%s:b]POD ID:[:-:-] %s (%s)", fgColor, bgColor, podID, podName)
+
+	description := fmt.Sprintf("%s\n\nAre you sure you want to forcefully remove the selected pod?\nThis will stop all containers and remove the pod.", podItem) //nolint:perfsprint
+
+	p.confirmDialog.SetText(description)
+	p.confirmDialog.Display()
 }
 
 func (p *Pods) inspect() {
@@ -268,6 +356,35 @@ func (p *Pods) remove() {
 	}
 
 	go remove(p.selectedID)
+}
+
+func (p *Pods) forceRemove() {
+	p.progressDialog.SetTitle("pod force remove in progress")
+	p.progressDialog.Display()
+
+	forceRemove := func(id string) {
+		errData, err := ppods.ForceRemove(id)
+
+		p.progressDialog.Hide()
+
+		if err != nil {
+			title := fmt.Sprintf("POD (%s) FORCE REMOVE ERROR", p.selectedID)
+
+			p.displayError(title, err)
+			p.appFocusHandler()
+
+			return
+		}
+
+		if len(errData) > 0 {
+			title := fmt.Sprintf("POD (%s) FORCE REMOVE ERROR", p.selectedID)
+
+			p.displayError(title, fmt.Errorf("%w %v", errPodRemove, errData))
+			p.appFocusHandler()
+		}
+	}
+
+	go forceRemove(p.selectedID)
 }
 
 func (p *Pods) start() {
