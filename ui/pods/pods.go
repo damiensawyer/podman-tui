@@ -182,6 +182,9 @@ func NewPods() *Pods {
 	// set stats dialog functions
 	pods.statsDialog.SetDoneFunc(pods.statsDialog.Hide)
 
+	// set load chart dialog functions
+	pods.loadChartDialog.SetDoneFunc(pods.loadChartDialog.Hide)
+
 	// set sort dialog functions
 	pods.sortDialog.SetCancelFunc(pods.sortDialog.Hide)
 	pods.sortDialog.SetSelectFunc(pods.SortView)

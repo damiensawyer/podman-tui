@@ -226,6 +226,9 @@ func NewContainers() *Containers {
 	// set stats dialogs functions
 	containers.statsDialog.SetDoneFunc(containers.statsDialog.Hide)
 
+	// set load chart dialog functions
+	containers.loadChartDialog.SetDoneFunc(containers.loadChartDialog.Hide)
+
 	// set commit dialog functions
 	containers.commitDialog.SetCommitFunc(containers.commit)
 	containers.commitDialog.SetCancelFunc(containers.commitDialog.Hide)

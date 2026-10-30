@@ -2,6 +2,7 @@ package charts
 
 import (
 	"slices"
+	"strings"
 )
 
 // Scope selects what the load chart is drawn for.
@@ -64,6 +65,21 @@ func (s Scope) resolve(group GroupMode) GroupMode {
 	}
 
 	return GroupTotal
+}
+
+// owns reports whether the series with the given id belongs to the group
+// mode; the legend lists only the series of the active group.
+func (g GroupMode) owns(id string) bool {
+	switch g {
+	case GroupPod:
+		return strings.HasPrefix(id, podSeriesPrefix)
+	case GroupContainer:
+		return strings.HasPrefix(id, cntSeriesPrefix)
+	case GroupProcess:
+		return strings.HasPrefix(id, procSeriesPrefix) || id == otherSeriesID
+	default:
+		return id == totalSeriesID
+	}
 }
 
 // Series identifiers.

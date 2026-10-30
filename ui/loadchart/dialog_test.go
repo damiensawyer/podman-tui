@@ -299,10 +299,9 @@ var _ = Describe("LoadChartDialog", func() {
 		sendKey(dialog, 't')
 		Expect(dialog.ToggleOpen()).To(BeTrue())
 
-		// move selection to the cnt:a row (1: total, 2: cnt:a), then flip
-		// the series
+		// the table lists the active group only: move selection to the
+		// cnt:a row (1), then flip the series
 		handler := dialog.InputHandler()
-		handler(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone), func(tview.Primitive) {})
 		handler(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone), func(tview.Primitive) {})
 		handler(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), func(tview.Primitive) {})
 

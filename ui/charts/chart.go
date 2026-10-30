@@ -26,8 +26,13 @@ const (
 const (
 	// yAxisWidth reserves room for the y-axis labels ("256MiB", "100%").
 	yAxisWidth = 6
-	// legendMaxRows caps the legend row count.
-	legendMaxRows = 6
+	// legendMinRows is the legend row count always granted when there
+	// are enough series; larger charts give the legend up to a third of
+	// their height.
+	legendMinRows = 6
+	// legendHeightDiv is the divisor of the chart height bounding the
+	// legend rows.
+	legendHeightDiv = 3
 	// legendValueWidth reserves room for the right aligned legend value.
 	legendValueWidth = 8
 	// sparkMaxCells caps the legend sparkline width in cells.
@@ -87,6 +92,12 @@ type Chart struct {
 
 	metric     Metric
 	symbolMode SymbolMode
+
+	// legendFilter selects the series listed in the legend; nil lists
+	// every series.
+	legendFilter func(id string) bool
+	// legendOffset is the index of the first listed legend entry.
+	legendOffset int
 }
 
 // NewChart returns a new empty chart.
@@ -176,6 +187,33 @@ func (c *Chart) Visible(id string) bool {
 	return !c.hidden[id]
 }
 
+// SetLegendFilter selects which series the legend lists (nil lists all)
+// and scrolls the legend back to its top.
+func (c *Chart) SetLegendFilter(filter func(id string) bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.legendFilter = filter
+	c.legendOffset = 0
+}
+
+// ScrollLegend scrolls the legend by delta entries. The offset is clamped
+// to the listed entries on the next draw.
+func (c *Chart) ScrollLegend(delta int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.legendOffset = max(c.legendOffset+delta, 0)
+}
+
+// LegendOffset returns the index of the first listed legend entry.
+func (c *Chart) LegendOffset() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.legendOffset
+}
+
 // SetMetric switches the plotted measurement.
 func (c *Chart) SetMetric(metric Metric) {
 	c.mu.Lock()
@@ -217,6 +255,7 @@ func (c *Chart) Reset() {
 	c.order = nil
 	c.hidden = make(map[string]bool)
 	c.colors = newColorAssigner()
+	c.legendOffset = 0
 }
 
 // SeriesCount returns the number of samples collected for the series with
@@ -253,6 +292,28 @@ func (c *Chart) SeriesInfos() []SeriesInfo {
 	return infos
 }
 
+// LegendInfos returns legend metadata for the series the legend lists.
+func (c *Chart) LegendInfos() []SeriesInfo {
+	c.mu.Lock()
+	filter := c.legendFilter
+	c.mu.Unlock()
+
+	infos := c.SeriesInfos()
+	if filter == nil {
+		return infos
+	}
+
+	listed := infos[:0]
+
+	for _, info := range infos {
+		if filter(info.ID) {
+			listed = append(listed, info)
+		}
+	}
+
+	return listed
+}
+
 // Draw draws this primitive onto the screen.
 func (c *Chart) Draw(screen tcell.Screen) {
 	c.DrawForSubclass(screen, c)
@@ -264,9 +325,9 @@ func (c *Chart) Draw(screen tcell.Screen) {
 		return
 	}
 
-	snaps := c.snapshot()
+	snaps, legend := c.snapshot()
 
-	legendRows := min(len(snaps), legendMaxRows)
+	legendRows := min(len(legend), max(legendMinRows, height/legendHeightDiv))
 	plotRows := height - 1 - legendRows
 
 	for plotRows < minPlotRows && legendRows > 0 {
@@ -284,15 +345,17 @@ func (c *Chart) Draw(screen tcell.Screen) {
 
 	blitCanvas(screen, canvas, plotX, plotY, tickRows, c.GetBackgroundColor())
 	drawXLabels(screen, plotX, y+plotRows, plotCols)
-	c.drawLegend(screen, snaps, x, y+plotRows+1, width, plotCols, yMax)
+	c.drawLegend(screen, legend, x, y+plotRows+1, width, legendRows, plotCols, yMax)
 }
 
-// snapshot copies all series samples under the mutex.
-func (c *Chart) snapshot() []seriesSnapshot {
+// snapshot copies all series samples under the mutex and returns them
+// together with the subset the legend lists.
+func (c *Chart) snapshot() ([]seriesSnapshot, []seriesSnapshot) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	snaps := make([]seriesSnapshot, 0, len(c.order))
+	legend := make([]seriesSnapshot, 0, len(c.order))
 
 	for _, id := range c.order {
 		series := c.series[id]
@@ -302,16 +365,49 @@ func (c *Chart) snapshot() []seriesSnapshot {
 			samples[i] = series.At(i)
 		}
 
-		snaps = append(snaps, seriesSnapshot{
+		snap := seriesSnapshot{
 			id:      series.ID(),
 			name:    series.Name(),
 			color:   series.Color(),
 			visible: !c.hidden[id],
 			samples: samples,
-		})
+		}
+
+		snaps = append(snaps, snap)
+
+		if c.legendFilter == nil || c.legendFilter(id) {
+			legend = append(legend, snap)
+		}
 	}
 
-	return snaps
+	return snaps, legend
+}
+
+// legendWindow clamps the legend offset to the listed entries and returns
+// the entries fitting into rows. When the entries overflow, the last row
+// is kept for the scroll indicator.
+func (c *Chart) legendWindow(legend []seriesSnapshot, rows int) ([]seriesSnapshot, int, bool) {
+	if len(legend) <= rows {
+		c.mu.Lock()
+		c.legendOffset = 0
+		c.mu.Unlock()
+
+		return legend, 0, false
+	}
+
+	// a single row has no room for the indicator: show the top entry
+	if rows < 2 { //nolint:mnd
+		return legend[:rows], 0, false
+	}
+
+	entries := rows - 1
+
+	c.mu.Lock()
+	c.legendOffset = min(c.legendOffset, len(legend)-entries)
+	offset := c.legendOffset
+	c.mu.Unlock()
+
+	return legend[offset : offset+entries], offset, true
 }
 
 // plotSeries renders the visible snapshots onto the canvas.
@@ -477,15 +573,27 @@ func drawXLabels(screen tcell.Screen, x, y, plotCols int) {
 	drawStringRight(screen, x, y, plotCols, "now", labelStyle)
 }
 
-// drawLegend writes one row per series: colour badge, name, current value
-// and a braille sparkline of the recent window.
-func (c *Chart) drawLegend(screen tcell.Screen, snaps []seriesSnapshot,
-	x, y, width, plotCols int, yMax float64,
+// drawLegend writes one row per listed series into at most rows rows:
+// colour badge, name, current value and a braille sparkline of the recent
+// window. Overflowing entries scroll, with an indicator on the last row.
+func (c *Chart) drawLegend(screen tcell.Screen, legend []seriesSnapshot,
+	x, y, width, rows, plotCols int, yMax float64,
 ) {
+	if rows <= 0 {
+		return
+	}
+
 	bg := c.GetBackgroundColor()
 
+	snaps, offset, overflow := c.legendWindow(legend, rows)
+	if overflow {
+		indicator := fmt.Sprintf("↑↓ %d-%d of %d series", offset+1, offset+len(snaps), len(legend))
+		indicatorStyle := tcell.StyleDefault.Foreground(style.DialogSubBoxBorderColor).Background(bg)
+		drawString(screen, x+2, y+len(snaps), truncate(indicator, width-2), indicatorStyle) //nolint:mnd
+	}
+
 	sparkCells := min(sparkMaxCells, width/4, plotCols)
-	valueX := x + width - sparkCells - legendValueWidth
+	valueX := x + width - sparkCells - 1 - legendValueWidth
 
 	if sparkCells < 4 {
 		sparkCells = 0
@@ -604,7 +712,13 @@ func niceByteCeil(v float64) float64 {
 // FormatValue formats a measurement value for display.
 func FormatValue(metric Metric, v float64) string {
 	if metric == MetricCPU {
-		return fmt.Sprintf("%g%%", v)
+		// whole values (the axis ticks) stay bare, samples keep one
+		// decimal so they fit the legend value column
+		if v == math.Trunc(v) {
+			return fmt.Sprintf("%.0f%%", v)
+		}
+
+		return fmt.Sprintf("%.1f%%", v)
 	}
 
 	return units.BytesSize(v)
@@ -641,7 +755,7 @@ func truncate(s string, width int) string {
 
 // drawString writes s starting at (x, y).
 func drawString(screen tcell.Screen, x, y int, s string, st tcell.Style) {
-	for i, r := range s {
+	for i, r := range []rune(s) {
 		screen.SetContent(x+i, y, r, nil, st)
 	}
 }

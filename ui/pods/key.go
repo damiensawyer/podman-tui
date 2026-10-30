@@ -65,6 +65,13 @@ func (pods *Pods) InputHandler() func(event *tcell.EventKey, setFocus func(p tvi
 			}
 		}
 
+		// load chart dialog handler
+		if pods.loadChartDialog.HasFocus() {
+			if loadChartDialogHandler := pods.loadChartDialog.InputHandler(); loadChartDialogHandler != nil {
+				loadChartDialogHandler(event, setFocus)
+			}
+		}
+
 		// pod sort dialog handler
 		if pods.sortDialog.HasFocus() {
 			if podsSortDialogHandler := pods.sortDialog.InputHandler(); podsSortDialogHandler != nil {

@@ -87,6 +87,7 @@ func NewSystem() *System {
 	}
 
 	sys.loadChartDialog = loadchart.NewLoadChartDialog(charts.ScopeSystem, sys.resolveLoadChartTarget)
+	sys.loadChartDialog.SetDoneFunc(sys.loadChartDialog.Hide)
 
 	// connection table
 	sys.connTable.SetBackgroundColor(style.BgColor)

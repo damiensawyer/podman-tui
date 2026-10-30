@@ -86,6 +86,13 @@ func (cnt *Containers) InputHandler() func(event *tcell.EventKey, setFocus func(
 			}
 		}
 
+		// load chart dialog handler
+		if cnt.loadChartDialog.HasFocus() {
+			if loadChartDialogHandler := cnt.loadChartDialog.InputHandler(); loadChartDialogHandler != nil {
+				loadChartDialogHandler(event, setFocus)
+			}
+		}
+
 		// container commit dialog handler
 		if cnt.commitDialog.HasFocus() {
 			if cntCommitDialogHandler := cnt.commitDialog.InputHandler(); cntCommitDialogHandler != nil {

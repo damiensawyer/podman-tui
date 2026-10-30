@@ -28,6 +28,13 @@ const (
 	toggleKey = 't'
 )
 
+const (
+	// legendPageSize is the legend scroll step of PgUp and PgDn.
+	legendPageSize = 5
+	// maxLegendScroll scrolls the legend to an end; the chart clamps it.
+	maxLegendScroll = 1 << 20
+)
+
 // collectorFactory creates the collector for an open dialog; replaceable
 // for tests.
 type collectorFactory func(chart *charts.Chart, scope charts.Scope, target charts.ScopeTarget) *charts.Collector
@@ -267,12 +274,31 @@ func (d *LoadChartDialog) InputHandler() func(event *tcell.EventKey, setFocus fu
 			d.togglePause()
 		case toggleKey:
 			d.openToggle()
+		case 'k':
+			d.scrollLegend(-1)
+		case 'j':
+			d.scrollLegend(1)
 		}
 
-		if event.Key() == tcell.KeyEsc {
-			d.doneHandler()
+		switch event.Key() {
+		case tcell.KeyEsc:
+			if d.doneHandler != nil {
+				d.doneHandler()
+			}
 
 			return
+		case tcell.KeyUp:
+			d.scrollLegend(-1)
+		case tcell.KeyDown:
+			d.scrollLegend(1)
+		case tcell.KeyPgUp:
+			d.scrollLegend(-legendPageSize)
+		case tcell.KeyPgDn:
+			d.scrollLegend(legendPageSize)
+		case tcell.KeyHome:
+			d.scrollLegend(-maxLegendScroll)
+		case tcell.KeyEnd:
+			d.scrollLegend(maxLegendScroll)
 		}
 
 		if d.form.HasFocus() {
@@ -392,6 +418,12 @@ func (d *LoadChartDialog) togglePause() {
 	d.requestFastRefresh()
 }
 
+// scrollLegend scrolls the chart legend by delta entries.
+func (d *LoadChartDialog) scrollLegend(delta int) {
+	d.chart.ScrollLegend(delta)
+	d.requestFastRefresh()
+}
+
 // currentCollector returns the active collector, if any.
 func (d *LoadChartDialog) currentCollector() *charts.Collector {
 	d.mu.Lock()
@@ -458,7 +490,7 @@ func (d *LoadChartDialog) openToggle() {
 
 	d.rebuildToggle()
 
-	height := min(len(d.chart.SeriesInfos())+1, 10)
+	height := min(len(d.chart.LegendInfos())+1, 10) //nolint:mnd
 	d.layout.ResizeItem(d.toggleTable, height, 0)
 
 	d.updateControls()
@@ -500,15 +532,18 @@ func (d *LoadChartDialog) rebuildToggle() {
 
 	fg := style.DialogFgColor
 
-	for row, info := range d.chart.SeriesInfos() {
+	// the series id rides along as the name cell reference
+	for row, info := range d.chart.LegendInfos() {
 		state := "shown"
 		if !info.Visible {
 			state = "hidden"
 		}
 
-		d.toggleTable.SetCell(row+1, 0, tview.NewTableCell(info.ID).SetTextColor(info.Color))
-		d.toggleTable.SetCell(row+1, 1, tview.NewTableCell(info.Name).SetTextColor(fg))
-		d.toggleTable.SetCell(row+1, 2, tview.NewTableCell(state).SetTextColor(fg))
+		d.toggleTable.SetCell(row+1, 0, tview.NewTableCell("● "+tview.Escape(info.Name)).
+			SetTextColor(info.Color).
+			SetExpansion(1).
+			SetReference(info.ID))
+		d.toggleTable.SetCell(row+1, 1, tview.NewTableCell(state).SetTextColor(fg))
 	}
 }
 
@@ -520,7 +555,7 @@ func (d *LoadChartDialog) toggleSelectedSeries() {
 		return
 	}
 
-	id := d.toggleTable.GetCell(row, 0).Text
+	id, _ := d.toggleTable.GetCell(row, 0).GetReference().(string)
 	if id == "" {
 		return
 	}
@@ -533,7 +568,7 @@ func (d *LoadChartDialog) toggleSelectedSeries() {
 		state = "hidden"
 	}
 
-	d.toggleTable.GetCell(row, 2).SetText(state)
+	d.toggleTable.GetCell(row, 1).SetText(state)
 }
 
 // showBanner surfaces a collection error above the chart. The collector
@@ -599,7 +634,7 @@ func (d *LoadChartDialog) updateControls() {
 		pauseLabel = "[::b]p[::-]ause: [yellow]paused[-]"
 	}
 
-	legend := fmt.Sprintf(" %s   [::b]g[::-]roup: %s   [::b]m[::-]etric: %s   [::b]s[::-]ymbol: %s   [::b]t[::-]oggle series   [::b]esc[::-] close",
+	legend := fmt.Sprintf(" %s   [::b]g[::-]roup: %s   [::b]m[::-]etric: %s   [::b]s[::-]ymbol: %s   [::b]t[::-]oggle series   [::b]↑↓[::-] legend   [::b]esc[::-] close",
 		pauseLabel, groupLabel, metricName(metric), symbolName(symbol))
 
 	d.controls.SetText(legend)

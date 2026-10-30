@@ -3,6 +3,7 @@ package charts
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -104,6 +105,8 @@ type ProcessSample struct {
 // stream, listing and host seams must be wired before Start; see the
 // ui/loadchart package for the podman wiring.
 func NewCollector(chart *Chart, scope Scope, target ScopeTarget) *Collector {
+	chart.SetLegendFilter(GroupTotal.owns)
+
 	return &Collector{
 		chart:       chart,
 		scope:       scope,
@@ -304,6 +307,7 @@ func (c *Collector) NextGroup() GroupMode {
 	index := slices.Index(available, c.scope.resolve(c.group))
 
 	c.group = available[(index+1)%len(available)]
+	c.chart.SetLegendFilter(c.group.owns)
 	c.applyVisibility()
 
 	return c.group
@@ -315,6 +319,7 @@ func (c *Collector) SetGroup(group GroupMode) {
 	defer c.mu.Unlock()
 
 	c.group = c.scope.resolve(group)
+	c.chart.SetLegendFilter(c.group.owns)
 	c.applyVisibility()
 }
 
@@ -758,12 +763,18 @@ func (c *Collector) restartIfChanged(ctx context.Context, present map[string]boo
 func (c *Collector) inScope(item ContainerInfo) bool {
 	switch c.scope {
 	case ScopePod:
-		return item.Pod == c.target.PodID
+		return idMatches(item.Pod, c.target.PodID)
 	case ScopeContainer:
-		return item.ID == c.target.ContainerID
+		return idMatches(item.ID, c.target.ContainerID)
 	default:
 		return !item.IsInfra
 	}
+}
+
+// idMatches reports whether the full podman id matches the target id;
+// the pages pass the truncated 12 character ids shown in their tables.
+func idMatches(fullID, targetID string) bool {
+	return targetID != "" && strings.HasPrefix(fullID, targetID)
 }
 
 // ageOut increments absence counters and evicts series after a full
@@ -802,9 +813,6 @@ func (c *Collector) ageOut(present, presentPods map[string]bool) {
 			delete(c.podAbsent, pod)
 		}
 	}
-
-	// keep the active group mode applied as series appear and disappear
-	c.applyVisibility()
 }
 
 // trackTarget ages out the single container scope target.
@@ -822,7 +830,7 @@ func (c *Collector) trackTarget() {
 
 	present := false
 	for _, item := range listing {
-		if item.ID == c.target.ContainerID {
+		if idMatches(item.ID, c.target.ContainerID) {
 			present = true
 
 			break
@@ -840,7 +848,11 @@ func (c *Collector) trackTarget() {
 
 	c.absentTarget++
 	if c.absentTarget >= evictionTicks {
-		c.chart.RemoveSeries(cntSeriesPrefix + c.target.ContainerID)
+		// the series is keyed by the full id the stats stream reports
+		for id := range c.nameOf {
+			c.chart.RemoveSeries(cntSeriesPrefix + id)
+		}
+
 		c.chart.RemoveSeries(totalSeriesID)
 	}
 }
