@@ -6,6 +6,7 @@ package loadchart
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	pdcscontainers "github.com/containers/podman-tui/pdcs/containers"
@@ -26,6 +27,7 @@ func NewCollector(chart *charts.Chart, scope charts.Scope, target charts.ScopeTa
 	collector.SetStreamFunc(streamAdapter)
 	collector.SetListFunc(listAdapter)
 	collector.SetMemTotalFunc(memTotalAdapter)
+	collector.SetProcessFunc(processAdapter)
 
 	if registry.ConnectionURI() == "" || strings.HasPrefix(registry.ConnectionURI(), "unix://") {
 		collector.SetLocalHost(true)
@@ -133,4 +135,59 @@ func memTotalAdapter() (uint64, error) {
 	}
 
 	return info.MemTotal, nil
+}
+
+// processAdapter polls the process tables of the given containers via
+// the podman top endpoint. Per container failures are tolerated while
+// at least one container reports.
+func processAdapter(ids []string) ([]charts.ProcessSample, error) {
+	samples := make([]charts.ProcessSample, 0, len(ids)*8)
+
+	var firstErr error
+
+	for _, id := range ids {
+		report, err := pdcscontainers.Top(id)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+
+			continue
+		}
+
+		samples = append(samples, convertProcesses(id, report)...)
+	}
+
+	if len(samples) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+
+	return samples, nil
+}
+
+// convertProcesses maps podman top rows to process samples. The first
+// row is the header and rows are ordered USER PID PPID CPU ELAPSED TTY
+// TIME COMMAND.
+func convertProcesses(id string, report [][]string) []charts.ProcessSample {
+	samples := make([]charts.ProcessSample, 0, len(report))
+
+	for i, row := range report {
+		if i == 0 || len(row) < 8 { //nolint:mnd
+			continue
+		}
+
+		cpu, err := strconv.ParseFloat(row[3], 64)
+		if err != nil {
+			continue
+		}
+
+		samples = append(samples, charts.ProcessSample{
+			ContainerID: id,
+			PID:         row[1],
+			Name:        strings.Join(row[7:], " "),
+			CPU:         cpu,
+		})
+	}
+
+	return samples
 }

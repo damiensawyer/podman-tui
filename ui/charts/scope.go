@@ -42,15 +42,15 @@ const (
 )
 
 // availableGroups returns the group modes the scope supports, in cycling
-// order.
+// order. Process mode (CPU only) is available at every scope.
 func (s Scope) availableGroups() []GroupMode {
 	switch s {
 	case ScopeSystem:
-		return []GroupMode{GroupTotal, GroupPod, GroupContainer}
+		return []GroupMode{GroupTotal, GroupPod, GroupContainer, GroupProcess}
 	case ScopePod:
-		return []GroupMode{GroupTotal, GroupContainer}
+		return []GroupMode{GroupTotal, GroupContainer, GroupProcess}
 	case ScopeContainer:
-		return []GroupMode{GroupTotal}
+		return []GroupMode{GroupTotal, GroupProcess}
 	default:
 		return []GroupMode{GroupTotal}
 	}
@@ -74,7 +74,18 @@ const (
 	podSeriesPrefix = "pod:"
 	// cntSeriesPrefix prefixes container series ids.
 	cntSeriesPrefix = "cnt:"
+	// procSeriesPrefix prefixes per process series ids.
+	procSeriesPrefix = "proc:"
+	// otherSeriesID is the series aggregating processes beyond the top N.
+	otherSeriesID = "other"
 	// evictionTicks is the number of consecutive ticks a series may be
 	// absent from the container listing before it is evicted.
 	evictionTicks = 60
+	// processTopN is the number of processes kept as individual series;
+	// the remainder is aggregated into the "other" series.
+	processTopN = 12
+	// processPollRate is the number of collector ticks between process
+	// table polls: the top endpoint is one round trip per container, so
+	// polling runs on a relaxed cycle.
+	processPollRate = 4
 )

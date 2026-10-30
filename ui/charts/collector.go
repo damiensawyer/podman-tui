@@ -34,6 +34,7 @@ type Collector struct {
 	listFunc      func() ([]ContainerInfo, error)
 	hostCPUFunc   func() (float64, error)
 	memTotalFunc  func() (uint64, error)
+	processFunc   func(ids []string) ([]ProcessSample, error)
 	localHost     bool
 	interval      time.Duration
 	sourceStarted bool
@@ -52,12 +53,14 @@ type Collector struct {
 	podOf        map[string]string // container id -> pod name ("" = no pod)
 	infraOf      map[string]bool   // container id -> is infra
 	podsKnown    map[string]bool   // pod names with series
+	procKnown    map[string]bool   // process series ids with series
 	absentTicks  map[string]int    // container id -> absent ticks
 	podAbsent    map[string]int    // pod name -> absent ticks
 	group        GroupMode
 	metric       Metric
 	paused       bool
 	absentTarget int
+	processTick  int
 	errHandler   func(error)
 }
 
@@ -87,6 +90,16 @@ type ContainerInfo struct {
 	Running bool
 }
 
+// ProcessSample is one process measurement from a container process
+// table. CPU is the ps style lifetime average percentage the top
+// endpoint reports (not an instantaneous delta).
+type ProcessSample struct {
+	ContainerID string
+	PID         string
+	Name        string
+	CPU         float64
+}
+
 // NewCollector returns a collector for the given scope and target. The
 // stream, listing and host seams must be wired before Start; see the
 // ui/loadchart package for the podman wiring.
@@ -102,6 +115,7 @@ func NewCollector(chart *Chart, scope Scope, target ScopeTarget) *Collector {
 		podOf:       make(map[string]string),
 		infraOf:     make(map[string]bool),
 		podsKnown:   make(map[string]bool),
+		procKnown:   make(map[string]bool),
 		absentTicks: make(map[string]int),
 		podAbsent:   make(map[string]int),
 		group:       GroupTotal,
@@ -131,6 +145,11 @@ func (c *Collector) SetHostCPUFunc(fn func() (float64, error)) {
 // SetMemTotalFunc wires the host memory total source.
 func (c *Collector) SetMemTotalFunc(fn func() (uint64, error)) {
 	c.memTotalFunc = fn
+}
+
+// SetProcessFunc wires the process table source used by process mode.
+func (c *Collector) SetProcessFunc(fn func(ids []string) ([]ProcessSample, error)) {
+	c.processFunc = fn
 }
 
 // SetLocalHost marks the connection as local, which makes the system
@@ -427,12 +446,99 @@ func (c *Collector) tick(ctx context.Context) {
 
 	c.ingest(c.swapLatest())
 	c.sampleHostCPU()
+	c.pollProcessesTick()
 
 	if c.scope == ScopeContainer {
 		c.trackTarget()
 	} else {
 		c.churn(ctx)
 	}
+}
+
+// pollProcessesTick polls the process tables every processPollRate
+// ticks while process mode is active; the top endpoint is one round
+// trip per container so polling runs on a relaxed cycle.
+func (c *Collector) pollProcessesTick() {
+	c.mu.Lock()
+	group := c.group
+	c.processTick++
+	tick := c.processTick
+
+	ids := make([]string, 0, len(c.streamIDs))
+	for id := range c.streamIDs {
+		ids = append(ids, id)
+	}
+	c.mu.Unlock()
+
+	if group != GroupProcess || c.processFunc == nil || len(ids) == 0 {
+		return
+	}
+
+	if tick%processPollRate != 0 {
+		return
+	}
+
+	samples, err := c.processFunc(ids)
+	if err != nil {
+		c.reportError(err)
+
+		return
+	}
+
+	c.ingestProcesses(samples)
+}
+
+// ingestProcesses keeps the top N processes as individual series and
+// aggregates the remainder into the "other" series. Process series that
+// leave the top set are evicted immediately; process curves always plot
+// the ps style CPU percentage regardless of the active metric.
+func (c *Collector) ingestProcesses(samples []ProcessSample) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	sortDesc(samples, func(sample ProcessSample) float64 { return sample.CPU })
+
+	keep := make(map[string]bool)
+	other := 0.0
+
+	for i, sample := range samples {
+		id := procSeriesPrefix + sample.ContainerID + ":" + sample.PID
+
+		if i < processTopN {
+			keep[id] = true
+
+			if !c.procKnown[id] {
+				c.procKnown[id] = true
+				c.chart.EnsureSeries(id, sample.Name, tcell.ColorDefault)
+			}
+
+			c.chart.Push(id, sample.CPU)
+
+			continue
+		}
+
+		other += sample.CPU
+	}
+
+	if len(samples) > processTopN {
+		keep[otherSeriesID] = true
+
+		if !c.procKnown[otherSeriesID] {
+			c.procKnown[otherSeriesID] = true
+			c.chart.EnsureSeries(otherSeriesID, "other", tcell.ColorDefault)
+		}
+
+		c.chart.Push(otherSeriesID, other)
+	}
+
+	for id := range c.procKnown {
+		if !keep[id] {
+			c.chart.RemoveSeries(id)
+			delete(c.procKnown, id)
+		}
+	}
+
+	c.applyVisibility()
 }
 
 // ingest pushes the current metric value of every reported container

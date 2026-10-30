@@ -3,6 +3,7 @@ package charts_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"runtime"
 	"sync"
@@ -419,8 +420,9 @@ var _ = Describe("Collector", func() {
 		Expect(chart.Visible("total")).To(BeFalse())
 		Expect(chart.Visible("pod:web")).To(BeFalse())
 
-		// system scope cycles total -> pod -> container -> total
+		// system scope cycles total -> pod -> container -> process -> total
 		collector.SetGroup(charts.GroupContainer)
+		Expect(collector.NextGroup()).To(Equal(charts.GroupProcess))
 		Expect(collector.NextGroup()).To(Equal(charts.GroupTotal))
 
 		collector.Stop()
@@ -489,5 +491,96 @@ var _ = Describe("Collector", func() {
 		Consistently(stream.openCount, "100ms").Should(Equal(1))
 
 		collector.Stop()
+	})
+	Describe("Process mode", func() {
+		It("keeps the top processes as individual series", func() {
+			collector, chart, stream, listing := newTestCollector(
+				charts.ScopeSystem, charts.ScopeTarget{})
+
+			listing.set([]charts.ContainerInfo{listInfo("a", "", "", false, true)})
+
+			collector.SetProcessFunc(func(ids []string) ([]charts.ProcessSample, error) {
+				Expect(ids).To(ConsistOf("a"))
+
+				return []charts.ProcessSample{
+					{ContainerID: "a", PID: "100", Name: "nginx", CPU: 15},
+					{ContainerID: "a", PID: "101", Name: "python", CPU: 8},
+					{ContainerID: "a", PID: "102", Name: "sleep", CPU: 0.5},
+				}, nil
+			})
+
+			collector.Start()
+			Eventually(stream.openCount, "2s").Should(Equal(1))
+
+			collector.SetGroup(charts.GroupProcess)
+
+			Eventually(func() int { return chart.SeriesCount("proc:a:100") }, "2s").
+				Should(BeNumerically(">", 0))
+			Expect(chart.SeriesCount("proc:a:101")).To(BeNumerically(">", 0))
+			Expect(chart.SeriesCount("proc:a:102")).To(BeNumerically(">", 0))
+
+			// fewer processes than the top N: no "other" series
+			_, exists := seriesColor(chart, "other")
+			Expect(exists).To(BeFalse())
+
+			// process curves always plot CPU
+			Eventually(func() float64 { return seriesValue(chart, "proc:a:100") }, "2s").
+				Should(Equal(15.0))
+
+			collector.Stop()
+		})
+
+		It("aggregates processes beyond the top N and evicts departed ones", func() {
+			collector, chart, stream, listing := newTestCollector(
+				charts.ScopeSystem, charts.ScopeTarget{})
+
+			listing.set([]charts.ContainerInfo{listInfo("a", "", "", false, true)})
+
+			samples := make([]charts.ProcessSample, 0, 15)
+			for i := 1; i <= 15; i++ {
+				samples = append(samples, charts.ProcessSample{
+					ContainerID: "a",
+					PID:         fmt.Sprintf("%d", 100+i),
+					Name:        fmt.Sprintf("proc%d", i),
+					CPU:         float64(i),
+				})
+			}
+
+			collector.SetProcessFunc(func([]string) ([]charts.ProcessSample, error) {
+				return samples, nil
+			})
+
+			collector.Start()
+			Eventually(stream.openCount, "2s").Should(Equal(1))
+
+			collector.SetGroup(charts.GroupProcess)
+
+			// the highest CPU process is kept, the lowest lands in "other"
+			Eventually(func() int { return chart.SeriesCount("proc:a:115") }, "2s").
+				Should(BeNumerically(">", 0))
+			Eventually(func() int { return chart.SeriesCount("other") }, "2s").
+				Should(BeNumerically(">", 0))
+			Expect(chart.SeriesCount("proc:a:101")).To(Equal(0))
+
+			// the top process departs: its series is evicted immediately
+			// (the fake's slice was sorted in place by earlier ingests, so
+			// dropping the head removes the highest CPU process)
+			collector.SetProcessFunc(func([]string) ([]charts.ProcessSample, error) {
+				return samples[1:], nil
+			})
+
+			Eventually(func() int { return chart.SeriesCount("proc:a:115") }, "2s").
+				Should(Equal(0))
+
+			collector.Stop()
+		})
+
+		It("includes process mode in every scope cycle", func() {
+			collector, _, _, _ := newTestCollector(
+				charts.ScopeContainer, charts.ScopeTarget{ContainerID: "a", ContainerName: "a"})
+
+			Expect(collector.NextGroup()).To(Equal(charts.GroupProcess))
+			Expect(collector.NextGroup()).To(Equal(charts.GroupTotal))
+		})
 	})
 })
