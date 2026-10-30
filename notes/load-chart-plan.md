@@ -49,9 +49,13 @@ ui/charts/
   canvas.go      MicroCanvas: 2x4 sub-cell grid, BTOP lookup tables, line rasterizer
   chart.go       Chart primitive: canvas + N series + ring buffers + axes + legend
   series.go      Series model: ID, name, color, 60-sample ring buffer, window stats
-  collector.go   Background collector: persistent streaming stats, cgroup/host stats
-  loadchart.go   LoadChartDialog: tview dialog shell, hotkeys, control dropdowns
+  scope.go       Scope/ScopeTarget/GroupMode types and series id scheme
+  collector.go   Background collector engine (podman agnostic, seam wired)
   colors.go      Palette: 12 high-contrast hex colors, assigned by first appearance
+
+ui/loadchart/
+  defaults.go    Podman glue: adapters entities -> charts types, default wiring
+  loadchart.go   LoadChartDialog: tview dialog shell, hotkeys, control dropdowns
 ```
 
 Supporting pdcs changes (podman-aware, outside `ui/charts/`):
@@ -65,6 +69,8 @@ pdcs/hoststats/            NEW package: local cgroup/proc CPU reader (NOT `pdcs/
 ```
 
 Lint note: `.golangci.yml` enables every linter (`default: all`). The lookup tables and chart geometry will need targeted `//nolint:mnd` (and the `require-specific` rule means bare `//nolint` is rejected). Budget for this in milestone 1.
+
+Layout amendment (milestone 3): the collector engine lives in `ui/charts/collector.go` but is **podman agnostic** — it consumes podman free `ContainerSample`/`ContainerInfo` types through replaceable function seams. All podman glue (bindings stats stream, container listing, sysinfo, hoststats wiring) lives in the new `ui/loadchart` package, which will also host the dialog shell (milestone 4). Rationale: `ui/charts` then has zero podman imports end to end, so the whole package type checks on every GOOS — vendored cgo chains (buildah/define -> gpgme) otherwise break foreign target analysis of the reusable chart layers.
 
 ---
 

@@ -215,6 +215,19 @@ func (c *Chart) Reset() {
 	c.colors = newColorAssigner()
 }
 
+// SeriesCount returns the number of samples collected for the series with
+// the given id, or 0 when it does not exist.
+func (c *Chart) SeriesCount(id string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if series, ok := c.series[id]; ok {
+		return series.Len()
+	}
+
+	return 0
+}
+
 // SeriesInfos returns legend metadata for every series in stable order.
 func (c *Chart) SeriesInfos() []SeriesInfo {
 	c.mu.Lock()
