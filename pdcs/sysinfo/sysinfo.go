@@ -13,6 +13,7 @@ type SystemInfo struct {
 	Kernel         string
 	MemUsagePC     float64
 	SwapUsagePC    float64
+	MemTotal       uint64
 	Runtime        string
 	APIVersion     string
 	BuildahVersion string
@@ -37,6 +38,7 @@ func SysInfo() (*SystemInfo, error) {
 	info.OS = response.Host.OS
 	info.Arch = response.Host.Arch
 	info.Kernel = response.Host.Kernel
+	info.MemTotal = uint64(max(response.Host.MemTotal, 0))
 	memUsed := response.Host.MemTotal - response.Host.MemFree
 	swapUsed := response.Host.SwapTotal - response.Host.SwapFree
 	info.MemUsagePC = float64(memUsed*100) / float64(response.Host.MemTotal)    //nolint:mnd
