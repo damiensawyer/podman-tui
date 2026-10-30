@@ -109,6 +109,14 @@ func (cnt *Containers) Draw(screen tcell.Screen) { //nolint:cyclop
 		return
 	}
 
+	// load chart dialog
+	if cnt.loadChartDialog.IsDisplay() {
+		cnt.loadChartDialog.SetRect(x, y, width, height)
+		cnt.loadChartDialog.Draw(screen)
+
+		return
+	}
+
 	// commit dialog
 	if cnt.commitDialog.IsDisplay() {
 		cnt.commitDialog.SetRect(x, y, width, height)

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	ppods "github.com/containers/podman-tui/pdcs/pods"
+	"github.com/containers/podman-tui/ui/charts"
 	"github.com/containers/podman-tui/ui/dialogs"
 	"github.com/containers/podman-tui/ui/style"
 	"github.com/containers/podman-tui/ui/utils"
@@ -20,6 +21,8 @@ func (p *Pods) runCommand(cmd string) { //nolint:cyclop
 		p.inspect()
 	case "kill":
 		p.kill()
+	case "load chart":
+		p.loadChart()
 	case "logs":
 		p.logs()
 	case "pause":
@@ -53,6 +56,25 @@ func (p *Pods) displayError(title string, err error) {
 	p.errorDialog.SetTitle(title)
 	p.errorDialog.SetText(fmt.Sprintf("%v", err))
 	p.errorDialog.Display()
+}
+
+// loadChart displays the load chart dialog for the selected pod.
+func (p *Pods) loadChart() {
+	p.loadChartDialog.Display()
+}
+
+// resolveLoadChartTarget validates the selected pod and returns the load
+// chart scope target.
+func (p *Pods) resolveLoadChartTarget() (charts.ScopeTarget, error) {
+	if p.selectedID == "" {
+		p.displayError("", errNoPodChart)
+
+		return charts.ScopeTarget{}, errNoPodChart
+	}
+
+	podID, podName := p.getSelectedItem()
+
+	return charts.ScopeTarget{PodID: podID, PodName: podName}, nil
 }
 
 func (p *Pods) stats() {

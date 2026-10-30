@@ -6,7 +6,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/containers/podman-tui/ui/charts"
 	"github.com/containers/podman-tui/ui/dialogs"
+	"github.com/containers/podman-tui/ui/loadchart"
 	"github.com/containers/podman-tui/ui/pods/poddialogs"
 	"github.com/containers/podman-tui/ui/style"
 	"github.com/containers/podman-tui/ui/utils"
@@ -35,6 +37,7 @@ var (
 	errNoPodInspect = errors.New("there is no pod to display inspect")
 	errNoPodStat    = errors.New("there is no pod to display stats")
 	errNoPodLogs    = errors.New("there is no pod to display logs")
+	errNoPodChart   = errors.New("there is no pod to display the load chart")
 	errPodRemove    = errors.New("remove error")
 	errPodPrune     = errors.New("prune error")
 )
@@ -55,6 +58,8 @@ type Pods struct {
 	sortDialog      *dialogs.SortDialog
 	createDialog    *poddialogs.PodCreateDialog
 	statsDialog     *poddialogs.PodStatsDialog
+	loadChartDialog *loadchart.LoadChartDialog
+	fastRefreshChan chan bool
 	podsList        podsListReport
 	selectedID      string
 	confirmData     string
@@ -87,10 +92,13 @@ func NewPods() *Pods {
 
 	pods.topDialog.SetTitle("podman pod top")
 
+	pods.loadChartDialog = loadchart.NewLoadChartDialog(charts.ScopePod, pods.resolveLoadChartTarget)
+
 	pods.cmdDialog = dialogs.NewCommandDialog([][]string{
 		{"create", "create a new pod"},
 		{"inspect", "display information describing the selected pod"},
 		{"kill", "send SIGTERM signal to containers in the pod"},
+		{"load chart", "display live cpu and memory charts of the selected pod"},
 		{"logs", "display logs from all containers in the pod"},
 		{"pause", "pause  the selected pod"},
 		{"prune", "remove all stopped pods and their containers"},
@@ -186,6 +194,12 @@ func (pods *Pods) SetAppFocusHandler(handler func()) {
 	pods.appFocusHandler = handler
 }
 
+// SetFastRefreshChannel sets channel for fastRefresh func.
+func (pods *Pods) SetFastRefreshChannel(refresh chan bool) {
+	pods.fastRefreshChan = refresh
+	pods.loadChartDialog.SetFastRefreshChannel(refresh)
+}
+
 // GetTitle returns primitive title.
 func (pods *Pods) GetTitle() string {
 	return pods.title
@@ -213,6 +227,10 @@ func (pods *Pods) HasFocus() bool { //nolint:cyclop
 		return true
 	}
 
+	if pods.loadChartDialog.HasFocus() {
+		return true
+	}
+
 	return pods.Box.HasFocus()
 }
 
@@ -231,6 +249,10 @@ func (pods *Pods) SubDialogHasFocus() bool {
 	}
 
 	if pods.confirmDialog.HasFocus() || pods.createDialog.HasFocus() {
+		return true
+	}
+
+	if pods.loadChartDialog.HasFocus() {
 		return true
 	}
 
@@ -284,6 +306,13 @@ func (pods *Pods) Focus(delegate func(p tview.Primitive)) {
 	// stats dialog
 	if pods.statsDialog.IsDisplay() {
 		delegate(pods.statsDialog)
+
+		return
+	}
+
+	// load chart dialog
+	if pods.loadChartDialog.IsDisplay() {
+		delegate(pods.loadChartDialog)
 
 		return
 	}

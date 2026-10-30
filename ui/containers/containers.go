@@ -6,9 +6,11 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/containers/podman-tui/ui/charts"
 	"github.com/containers/podman-tui/ui/containers/cntdialogs"
 	"github.com/containers/podman-tui/ui/containers/cntdialogs/vterm"
 	"github.com/containers/podman-tui/ui/dialogs"
+	"github.com/containers/podman-tui/ui/loadchart"
 	"github.com/containers/podman-tui/ui/style"
 	"github.com/containers/podman-tui/ui/utils"
 	"github.com/containers/podman/v5/pkg/domain/entities"
@@ -66,6 +68,7 @@ type Containers struct {
 	runDialog        *cntdialogs.ContainerCreateDialog
 	execDialog       *cntdialogs.ContainerExecDialog
 	statsDialog      *cntdialogs.ContainerStatsDialog
+	loadChartDialog  *loadchart.LoadChartDialog
 	commitDialog     *cntdialogs.ContainerCommitDialog
 	checkpointDialog *cntdialogs.ContainerCheckpointDialog
 	restoreDialog    *cntdialogs.ContainerRestoreDialog
@@ -111,6 +114,8 @@ func NewContainers() *Containers {
 
 	containers.topDialog.SetTitle("podman container top")
 
+	containers.loadChartDialog = loadchart.NewLoadChartDialog(charts.ScopeContainer, containers.resolveLoadChartTarget)
+
 	containers.cmdDialog = dialogs.NewCommandDialog([][]string{
 		{"attach", "attach to a running container"},
 		{"checkpoint", "checkpoints a running container"},
@@ -121,6 +126,7 @@ func NewContainers() *Containers {
 		{"healthcheck", "run the health check of a container"},
 		{"inspect", "display the configuration of a container"},
 		{"kill", "kill the selected running container with a SIGKILL signal"},
+		{"load chart", "display live cpu and memory charts of the selected container"},
 		{"logs", "fetch the logs of the selected container"},
 		{"pause", "pause all the processes in the selected container"},
 		{"port", "list port mappings for the selected container"},
@@ -275,6 +281,10 @@ func (cnt *Containers) HasFocus() bool { //nolint:cyclop
 		return true
 	}
 
+	if cnt.loadChartDialog.HasFocus() {
+		return true
+	}
+
 	if cnt.checkpointDialog.HasFocus() || cnt.restoreDialog.HasFocus() {
 		return true
 	}
@@ -293,6 +303,10 @@ func (cnt *Containers) HasFocus() bool { //nolint:cyclop
 // SubDialogHasFocus returns whether or not sub dialog primitive has focus.
 func (cnt *Containers) SubDialogHasFocus() bool { //nolint:cyclop
 	if cnt.statsDialog.HasFocus() || cnt.errorDialog.HasFocus() {
+		return true
+	}
+
+	if cnt.loadChartDialog.HasFocus() {
 		return true
 	}
 
@@ -399,6 +413,13 @@ func (cnt *Containers) Focus(delegate func(p tview.Primitive)) { //nolint:cyclop
 		return
 	}
 
+	// load chart dialog
+	if cnt.loadChartDialog.IsDisplay() {
+		delegate(cnt.loadChartDialog)
+
+		return
+	}
+
 	// commit dialog
 	if cnt.commitDialog.IsDisplay() {
 		delegate(cnt.commitDialog)
@@ -440,6 +461,7 @@ func (cnt *Containers) Focus(delegate func(p tview.Primitive)) { //nolint:cyclop
 // SetFastRefreshChannel sets channel for fastRefresh func.
 func (cnt *Containers) SetFastRefreshChannel(refresh chan bool) {
 	cnt.fastRefreshChan = refresh
+	cnt.loadChartDialog.SetFastRefreshChannel(refresh)
 }
 
 // HideAllDialogs hides all sub dialogs.

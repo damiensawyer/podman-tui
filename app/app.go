@@ -98,6 +98,11 @@ func NewApp(name string, version string) *App {
 	// its required for container exec dialog.
 	app.containers.SetFastRefreshChannel(app.fastRefreshChan)
 
+	// set refresh channel for pods and system pages,
+	// its required for the load chart dialogs.
+	app.pods.SetFastRefreshChannel(app.fastRefreshChan)
+	app.system.SetFastRefreshChannel(app.fastRefreshChan)
+
 	// set refresh channel for image page
 	// its required for image build dialog.
 	app.images.SetFastRefreshChannel(app.fastRefreshChan)

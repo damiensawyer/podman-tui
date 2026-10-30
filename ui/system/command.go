@@ -6,6 +6,7 @@ import (
 
 	"github.com/containers/podman-tui/pdcs/registry"
 	"github.com/containers/podman-tui/pdcs/sysinfo"
+	"github.com/containers/podman-tui/ui/charts"
 	"github.com/containers/podman-tui/ui/dialogs"
 	"github.com/containers/podman-tui/ui/style"
 	"github.com/containers/podman-tui/ui/utils"
@@ -26,6 +27,8 @@ func (sys *System) runCommand(cmd string) {
 		sys.events()
 	case "info":
 		sys.info()
+	case "load chart":
+		sys.loadChart()
 	case utils.PruneCommandLabel:
 		sys.cprune()
 	case "remove connection":
@@ -40,6 +43,21 @@ func (sys *System) displayError(title string, err error) {
 	sys.errorDialog.SetTitle(title)
 	sys.errorDialog.SetText(fmt.Sprintf("%v", err))
 	sys.errorDialog.Display()
+}
+
+// loadChart displays the load chart dialog for the connected destination.
+func (sys *System) loadChart() {
+	sys.loadChartDialog.Display()
+}
+
+// resolveLoadChartTarget verifies a destination is connected and returns
+// the load chart scope target.
+func (sys *System) resolveLoadChartTarget() (charts.ScopeTarget, error) {
+	if !sys.destIsSet() {
+		return charts.ScopeTarget{}, errNotConnected
+	}
+
+	return charts.ScopeTarget{}, nil
 }
 
 func (sys *System) addConnection() {

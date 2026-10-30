@@ -6,6 +6,7 @@ import (
 
 	"github.com/containers/podman-tui/pdcs/containers"
 	"github.com/containers/podman-tui/pdcs/pods"
+	"github.com/containers/podman-tui/ui/charts"
 	"github.com/containers/podman-tui/ui/dialogs"
 	"github.com/containers/podman-tui/ui/style"
 	"github.com/containers/podman-tui/ui/utils"
@@ -33,6 +34,8 @@ func (cnt *Containers) runCommand(cmd string) { //nolint:cyclop
 		cnt.inspect()
 	case "kill":
 		cnt.kill()
+	case "load chart":
+		cnt.loadChart()
 	case "logs":
 		cnt.logs()
 	case "pause":
@@ -315,6 +318,39 @@ func (cnt *Containers) commit() {
 	}
 
 	go cntCommit()
+}
+
+// loadChart displays the load chart dialog for the selected container.
+func (cnt *Containers) loadChart() {
+	cnt.loadChartDialog.Display()
+}
+
+// resolveLoadChartTarget validates the selected container is running and
+// returns the load chart scope target.
+func (cnt *Containers) resolveLoadChartTarget() (charts.ScopeTarget, error) {
+	if cnt.selectedID == "" {
+		cnt.displayError("", errNoContainerStat)
+
+		return charts.ScopeTarget{}, errNoContainerStat
+	}
+
+	cntID, cntName := cnt.getSelectedItem()
+
+	cntStatus, err := containers.Status(cntID)
+	if err != nil {
+		cnt.displayError("", err)
+
+		return charts.ScopeTarget{}, err
+	}
+
+	if cntStatus != "running" {
+		err := fmt.Errorf("container (%s) status improper", cntID) //nolint:err113
+		cnt.displayError("", err)
+
+		return charts.ScopeTarget{}, err
+	}
+
+	return charts.ScopeTarget{ContainerID: cntID, ContainerName: cntName}, nil
 }
 
 func (cnt *Containers) stats() {

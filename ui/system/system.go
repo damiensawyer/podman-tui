@@ -7,7 +7,9 @@ import (
 	"sync"
 
 	"github.com/containers/podman-tui/pdcs/registry"
+	"github.com/containers/podman-tui/ui/charts"
 	"github.com/containers/podman-tui/ui/dialogs"
+	"github.com/containers/podman-tui/ui/loadchart"
 	"github.com/containers/podman-tui/ui/style"
 	"github.com/containers/podman-tui/ui/system/sysdialogs"
 	"github.com/containers/podman-tui/ui/utils"
@@ -15,6 +17,10 @@ import (
 )
 
 var ErrConnectionInprogres = errors.New("connection is in progress, need to disconnect")
+
+// errNotConnected is returned when the load chart dialog is opened
+// without a connected destination.
+var errNotConnected = errors.New("not connected to any podman service")
 
 // System implemnents the system information page primitive.
 type System struct {
@@ -33,6 +39,8 @@ type System struct {
 	dfDialog                 *sysdialogs.DfDialog
 	connPrgDialog            *sysdialogs.ConnectDialog
 	connAddDialog            *sysdialogs.AddConnectionDialog
+	loadChartDialog          *loadchart.LoadChartDialog
+	fastRefreshChan          chan bool
 	confirmData              string
 	connectionList           connectionListReport
 	connectionListFunc       func() []registry.Connection
@@ -78,6 +86,8 @@ func NewSystem() *System {
 		connectionList:   connectionListReport{sortBy: "name", ascending: true},
 	}
 
+	sys.loadChartDialog = loadchart.NewLoadChartDialog(charts.ScopeSystem, sys.resolveLoadChartTarget)
+
 	// connection table
 	sys.connTable.SetBackgroundColor(style.BgColor)
 	sys.connTable.SetBorder(true)
@@ -105,6 +115,7 @@ func NewSystem() *System {
 		{"disk usage", "display destination podman related disk usage"},
 		{"events", "display destination system events"},
 		{"info", "display destination podman system information"},
+		{"load chart", "display live cpu and memory charts of the destination"},
 		{"prune", "remove all unused pod, container, image and volume data"},
 		{"remove connection", "delete named destination for the Podman TUI"},
 		{"set default", "set selected destination as a default service"},
@@ -175,6 +186,12 @@ func NewSystem() *System {
 // SetAppFocusHandler sets application focus handler.
 func (sys *System) SetAppFocusHandler(handler func()) {
 	sys.appFocusHandler = handler
+}
+
+// SetFastRefreshChannel sets channel for fastRefresh func.
+func (sys *System) SetFastRefreshChannel(refresh chan bool) {
+	sys.fastRefreshChan = refresh
+	sys.loadChartDialog.SetFastRefreshChannel(refresh)
 }
 
 // GetTitle returns primitive title.
@@ -317,6 +334,7 @@ func (sys *System) getInnerDialogs(all bool) []utils.UIDialog {
 			sys.connPrgDialog,
 			sys.eventDialog,
 			sys.connAddDialog,
+			sys.loadChartDialog,
 			sys.sortDialog,
 		}
 	}
@@ -330,6 +348,7 @@ func (sys *System) getInnerDialogs(all bool) []utils.UIDialog {
 		sys.errorDialog,
 		sys.eventDialog,
 		sys.connAddDialog,
+		sys.loadChartDialog,
 		sys.sortDialog,
 	}
 }

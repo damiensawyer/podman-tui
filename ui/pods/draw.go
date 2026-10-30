@@ -86,6 +86,14 @@ func (pods *Pods) Draw(screen tcell.Screen) { //nolint:cyclop
 		return
 	}
 
+	// load chart dialog
+	if pods.loadChartDialog.IsDisplay() {
+		pods.loadChartDialog.SetRect(podViewX, podViewY, podViewW, podViewH)
+		pods.loadChartDialog.Draw(screen)
+
+		return
+	}
+
 	// sort dialog
 	if pods.sortDialog.IsDisplay() {
 		pods.sortDialog.SetRect(podViewX, podViewY, podViewW, podViewH)
