@@ -24,15 +24,27 @@ func (errResolveType) Error() string { return "no selection" }
 // fakeStream is a controlled stats stream emulating the bindings channel
 // contract: final error report then close on cancellation.
 type fakeStream struct {
-	mu    sync.Mutex
-	opens int
-	ctxs  []context.Context
-	chans []chan charts.SampleReport
+	mu       sync.Mutex
+	failOpen bool
+	opens    int
+	ctxs     []context.Context
+	chans    []chan charts.SampleReport
 }
+
+// errOpenFailed is the open failure used by the banner test.
+var errOpenFailed = errOpenFailedType{}
+
+type errOpenFailedType struct{}
+
+func (errOpenFailedType) Error() string { return "open failed" }
 
 func (f *fakeStream) open(ctx context.Context, ids []string, _ int) (<-chan charts.SampleReport, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	if f.failOpen {
+		return nil, errOpenFailed
+	}
 
 	f.opens++
 	f.ctxs = append(f.ctxs, ctx)
@@ -266,6 +278,53 @@ var _ = Describe("LoadChartDialog", func() {
 		handler(tcell.NewEventKey(tcell.KeyEsc, 0, tcell.ModNone), func(tview.Primitive) {})
 
 		Expect(closed).To(BeTrue())
+	})
+
+	It("opens the entity toggle with t and flips visibility with enter", func() {
+		dialog := newDialog(simpleResolve)
+		dialog.Display()
+		defer dialog.Hide()
+
+		Eventually(stream.openCount, "2s").Should(Equal(1))
+
+		stream.sendOne("a", "a", 42, 100)
+		Eventually(func() int { return chart.SeriesCount("cnt:a") }, "2s").
+			Should(BeNumerically(">", 0))
+
+		// container group first, so the series is visible by default
+		dialog.Collector().SetGroup(charts.GroupContainer)
+		Expect(dialog.ToggleOpen()).To(BeFalse())
+		Expect(chart.Visible("cnt:a")).To(BeTrue())
+
+		sendKey(dialog, 't')
+		Expect(dialog.ToggleOpen()).To(BeTrue())
+
+		// move selection to the cnt:a row (1: total, 2: cnt:a), then flip
+		// the series
+		handler := dialog.InputHandler()
+		handler(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone), func(tview.Primitive) {})
+		handler(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone), func(tview.Primitive) {})
+		handler(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), func(tview.Primitive) {})
+
+		Expect(chart.Visible("cnt:a")).To(BeFalse())
+
+		// enter again restores it; t closes the table
+		handler(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), func(tview.Primitive) {})
+		Expect(chart.Visible("cnt:a")).To(BeTrue())
+
+		sendKey(dialog, 't')
+		Expect(dialog.ToggleOpen()).To(BeFalse())
+	})
+
+	It("shows the connection banner when the stream cannot open", func() {
+		stream.failOpen = true
+
+		dialog := newDialog(simpleResolve)
+		dialog.Display()
+		defer dialog.Hide()
+
+		Eventually(func() string { return dialog.BannerText() }, "2s").
+			Should(ContainSubstring("open failed"))
 	})
 
 	It("renders the dialog on screen", func() {

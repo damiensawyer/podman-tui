@@ -133,12 +133,14 @@ func (c *Chart) Push(id string, value float64) {
 	}
 }
 
-// RemoveSeries drops the series with the given id.
+// RemoveSeries drops the series with the given id. A pending hidden
+// state is cleared with it: a re-created series starts visible.
 func (c *Chart) RemoveSeries(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	delete(c.series, id)
+	delete(c.hidden, id)
 
 	for i, item := range c.order {
 		if item == id {
@@ -150,7 +152,9 @@ func (c *Chart) RemoveSeries(id string) {
 }
 
 // SetVisible shows or hides a series without discarding its history, so
-// re-enabling it has no historical gaps.
+// re-enabling it has no historical gaps. The desired state is recorded
+// even for series that do not exist yet: a group default set before a
+// series is created is respected when the series appears.
 func (c *Chart) SetVisible(id string, visible bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

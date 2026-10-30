@@ -25,6 +25,7 @@ const (
 	metricKey = 'm'
 	symbolKey = 's'
 	pauseKey  = 'p'
+	toggleKey = 't'
 )
 
 // collectorFactory creates the collector for an open dialog; replaceable
@@ -41,7 +42,10 @@ type LoadChartDialog struct {
 
 	layout        *tview.Flex
 	controls      *tview.TextView
+	banner        *tview.TextView
 	chart         *charts.Chart
+	toggleTable   *tview.Table
+	toggleOpen    bool
 	collector     *charts.Collector
 	form          *tview.Form
 	collectorInit collectorFactory
@@ -84,6 +88,19 @@ func NewLoadChartDialog(scope charts.Scope, resolve func() (charts.ScopeTarget, 
 	dialog.controls.SetDynamicColors(true)
 	dialog.controls.SetBackgroundColor(style.DialogBgColor)
 
+	// connection banner: hidden (height 0) until a collection error
+	dialog.banner = tview.NewTextView()
+	dialog.banner.SetDynamicColors(true)
+	dialog.banner.SetTextAlign(tview.AlignCenter)
+	dialog.banner.SetBackgroundColor(style.ErrorDialogBgColor)
+
+	// entity toggle table: hidden (height 0) until opened with t
+	dialog.toggleTable = tview.NewTable()
+	dialog.toggleTable.SetBackgroundColor(style.DialogBgColor)
+	dialog.toggleTable.SetBorderColor(style.DialogSubBoxBorderColor)
+	dialog.toggleTable.SetFixed(1, 0)
+	dialog.toggleTable.SetSelectable(true, false)
+
 	// form
 	dialog.form = tview.NewForm().
 		AddButton("Close", nil).
@@ -98,7 +115,9 @@ func NewLoadChartDialog(scope charts.Scope, resolve func() (charts.ScopeTarget, 
 	dialog.layout.SetBackgroundColor(style.DialogBgColor)
 
 	dialog.layout.AddItem(utils.EmptyBoxSpace(style.DialogBgColor), chartPadding, 0, true)
+	dialog.layout.AddItem(dialog.banner, 0, 0, false)
 	dialog.layout.AddItem(dialog.chart, 0, 1, true)
+	dialog.layout.AddItem(dialog.toggleTable, 0, 0, false)
 	dialog.layout.AddItem(utils.EmptyBoxSpace(style.DialogBgColor), chartPadding, 0, true)
 	dialog.layout.AddItem(dialog.controls, 1, 0, true)
 	dialog.layout.AddItem(dialog.form, dialogs.DialogFormHeight, 0, true)
@@ -140,6 +159,8 @@ func (d *LoadChartDialog) Display() {
 	d.mu.Lock()
 	d.display = true
 	d.paused = false
+	d.closeToggleLocked()
+	d.clearBannerLocked()
 
 	d.chart.Reset()
 	d.chart.SetMetric(d.metric)
@@ -148,6 +169,7 @@ func (d *LoadChartDialog) Display() {
 	d.collector = d.collectorInit(d.chart, d.scope, target)
 	d.collector.SetErrorHandler(func(err error) {
 		log.Error().Msgf("load chart dialog: %v", err)
+		d.showBanner(err)
 	})
 	d.collector.SetPaused(false)
 	d.collector.Start()
@@ -170,6 +192,8 @@ func (d *LoadChartDialog) IsDisplay() bool {
 func (d *LoadChartDialog) Hide() {
 	d.mu.Lock()
 	d.display = false
+	d.closeToggleLocked()
+	d.clearBannerLocked()
 	collector := d.collector
 	d.collector = nil
 	d.mu.Unlock()
@@ -185,7 +209,7 @@ func (d *LoadChartDialog) Hide() {
 
 // HasFocus returns whether this primitive has focus.
 func (d *LoadChartDialog) HasFocus() bool {
-	if d.chart.HasFocus() || d.form.HasFocus() {
+	if d.chart.HasFocus() || d.form.HasFocus() || d.toggleTable.HasFocus() {
 		return true
 	}
 
@@ -194,6 +218,12 @@ func (d *LoadChartDialog) HasFocus() bool {
 
 // Focus is called when this primitive receives focus.
 func (d *LoadChartDialog) Focus(delegate func(p tview.Primitive)) {
+	if d.toggleOpen {
+		delegate(d.toggleTable)
+
+		return
+	}
+
 	delegate(d.chart)
 }
 
@@ -201,6 +231,28 @@ func (d *LoadChartDialog) Focus(delegate func(p tview.Primitive)) {
 func (d *LoadChartDialog) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
 	return d.WrapInputHandler(func(event *tcell.EventKey, setFocus func(tview.Primitive)) {
 		log.Debug().Msgf("load chart dialog: event %v received", event)
+
+		// the entity toggle table consumes input while open: Enter or
+		// space flips the selected series, t or Esc returns to the chart
+		// without closing the dialog.
+		if d.toggleOpen {
+			switch {
+			case event.Key() == tcell.KeyEsc:
+				d.closeToggle()
+			case event.Rune() == toggleKey:
+				d.closeToggle()
+			case event.Key() == tcell.KeyEnter || event.Rune() == ' ':
+				d.toggleSelectedSeries()
+			default:
+				if tableHandler := d.toggleTable.InputHandler(); tableHandler != nil {
+					tableHandler(event, setFocus)
+				}
+			}
+
+			d.requestFastRefresh()
+
+			return
+		}
 
 		// hotkeys are handled before the form so they cannot be
 		// swallowed by focused widgets
@@ -213,8 +265,8 @@ func (d *LoadChartDialog) InputHandler() func(event *tcell.EventKey, setFocus fu
 			d.cycleSymbol()
 		case pauseKey:
 			d.togglePause()
-		case 't':
-			// entity toggle arrives with milestone 6
+		case toggleKey:
+			d.openToggle()
 		}
 
 		if event.Key() == tcell.KeyEsc {
@@ -348,6 +400,168 @@ func (d *LoadChartDialog) currentCollector() *charts.Collector {
 	return d.collector
 }
 
+// ToggleOpen reports whether the entity toggle table is open.
+func (d *LoadChartDialog) ToggleOpen() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return d.toggleOpen
+}
+
+// ToggleSelection returns the entity toggle table's selected position.
+func (d *LoadChartDialog) ToggleSelection() (int, int) {
+	return d.toggleTable.GetSelection()
+}
+
+// ToggleCellText returns the text of an entity toggle table cell.
+func (d *LoadChartDialog) ToggleCellText(row, column int) string {
+	cell := d.toggleTable.GetCell(row, column)
+	if cell == nil {
+		return ""
+	}
+
+	return cell.Text
+}
+
+// BannerText returns the connection banner text, or "" when hidden.
+func (d *LoadChartDialog) BannerText() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return d.banner.GetText(true)
+}
+
+// toggleSeriesTable opens or closes the entity toggle table.
+func (d *LoadChartDialog) toggleSeriesTable() {
+	if d.toggleOpen {
+		d.closeToggle()
+
+		return
+	}
+
+	d.openToggle()
+}
+
+// openToggle reveals the entity toggle table and fills it from the
+// chart's series list.
+func (d *LoadChartDialog) openToggle() {
+	d.mu.Lock()
+
+	if d.toggleOpen {
+		d.mu.Unlock()
+
+		return
+	}
+
+	d.toggleOpen = true
+	d.mu.Unlock()
+
+	d.rebuildToggle()
+
+	height := min(len(d.chart.SeriesInfos())+1, 10)
+	d.layout.ResizeItem(d.toggleTable, height, 0)
+
+	d.updateControls()
+	d.requestFastRefresh()
+}
+
+// closeToggle hides the entity toggle table.
+func (d *LoadChartDialog) closeToggle() {
+	d.mu.Lock()
+	d.closeToggleLocked()
+	d.mu.Unlock()
+
+	d.updateControls()
+}
+
+// closeToggleLocked is closeToggle without locking; callers may already
+// hold the dialog mutex.
+func (d *LoadChartDialog) closeToggleLocked() {
+	if !d.toggleOpen {
+		return
+	}
+
+	d.toggleOpen = false
+	d.layout.ResizeItem(d.toggleTable, 0, 0)
+}
+
+// rebuildToggle refills the table rows from the chart's series list.
+func (d *LoadChartDialog) rebuildToggle() {
+	d.toggleTable.Clear()
+
+	d.toggleTable.SetCell(0, 0, tview.NewTableCell("[::b]SERIES[::-]").
+		SetTextColor(style.TableHeaderFgColor).
+		SetBackgroundColor(style.TableHeaderBgColor).
+		SetSelectable(false))
+	d.toggleTable.SetCell(0, 1, tview.NewTableCell("[::b]VISIBLE[::-]").
+		SetTextColor(style.TableHeaderFgColor).
+		SetBackgroundColor(style.TableHeaderBgColor).
+		SetSelectable(false))
+
+	fg := style.DialogFgColor
+
+	for row, info := range d.chart.SeriesInfos() {
+		state := "shown"
+		if !info.Visible {
+			state = "hidden"
+		}
+
+		d.toggleTable.SetCell(row+1, 0, tview.NewTableCell(info.ID).SetTextColor(info.Color))
+		d.toggleTable.SetCell(row+1, 1, tview.NewTableCell(info.Name).SetTextColor(fg))
+		d.toggleTable.SetCell(row+1, 2, tview.NewTableCell(state).SetTextColor(fg))
+	}
+}
+
+// toggleSelectedSeries flips the visibility of the series on the
+// selected table row, updating the row in place.
+func (d *LoadChartDialog) toggleSelectedSeries() {
+	row, _ := d.toggleTable.GetSelection()
+	if row <= 0 {
+		return
+	}
+
+	id := d.toggleTable.GetCell(row, 0).Text
+	if id == "" {
+		return
+	}
+
+	visible := !d.chart.Visible(id)
+	d.chart.SetVisible(id, visible)
+
+	state := "shown"
+	if !visible {
+		state = "hidden"
+	}
+
+	d.toggleTable.GetCell(row, 2).SetText(state)
+}
+
+// showBanner surfaces a collection error above the chart. The collector
+// keeps retrying, so the banner is informational and stays until the
+// dialog is reopened.
+func (d *LoadChartDialog) showBanner(err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.banner.SetText(fmt.Sprintf("[::b]connection issue: %v [-]— collection continues automatically", err))
+	d.layout.ResizeItem(d.banner, 1, 0)
+}
+
+// clearBanner hides the connection banner.
+func (d *LoadChartDialog) clearBanner() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.clearBannerLocked()
+}
+
+// clearBannerLocked is clearBanner without locking; callers may already
+// hold the dialog mutex.
+func (d *LoadChartDialog) clearBannerLocked() {
+	d.banner.SetText("")
+	d.layout.ResizeItem(d.banner, 0, 0)
+}
+
 // requestFastRefresh asks the app for an immediate repaint.
 func (d *LoadChartDialog) requestFastRefresh() {
 	if d.fastRefreshChan == nil {
@@ -380,11 +594,13 @@ func (d *LoadChartDialog) updateControls() {
 
 	d.layout.SetTitle(fmt.Sprintf("%s [%s]", dialogTitle, subtitle))
 
-	legend := fmt.Sprintf(" [::b]g[::-]roup: %s   [::b]m[::-]etric: %s   [::b]s[::-]ymbol: %s   [::b]p[::-]ause   [::b]esc[::-] close",
-		groupLabel, metricName(metric), symbolName(symbol))
+	pauseLabel := "[::b]p[::-]ause"
 	if paused {
-		legend = fmt.Sprintf(" [::b]p[::-]ause: [yellow]paused[-]  %s", legend)
+		pauseLabel = "[::b]p[::-]ause: [yellow]paused[-]"
 	}
+
+	legend := fmt.Sprintf(" %s   [::b]g[::-]roup: %s   [::b]m[::-]etric: %s   [::b]s[::-]ymbol: %s   [::b]t[::-]oggle series   [::b]esc[::-] close",
+		pauseLabel, groupLabel, metricName(metric), symbolName(symbol))
 
 	d.controls.SetText(legend)
 }

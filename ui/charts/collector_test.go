@@ -418,6 +418,7 @@ var _ = Describe("Collector", func() {
 		collector.SetGroup(charts.GroupContainer)
 		Expect(chart.Visible("cnt:a")).To(BeTrue())
 		Expect(chart.Visible("total")).To(BeFalse())
+
 		Expect(chart.Visible("pod:web")).To(BeFalse())
 
 		// system scope cycles total -> pod -> container -> process -> total

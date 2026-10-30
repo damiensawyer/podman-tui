@@ -498,6 +498,8 @@ func (c *Collector) ingestProcesses(samples []ProcessSample) {
 
 	sortDesc(samples, func(sample ProcessSample) float64 { return sample.CPU })
 
+	group := c.scope.resolve(c.group)
+
 	keep := make(map[string]bool)
 	other := 0.0
 
@@ -510,6 +512,7 @@ func (c *Collector) ingestProcesses(samples []ProcessSample) {
 			if !c.procKnown[id] {
 				c.procKnown[id] = true
 				c.chart.EnsureSeries(id, sample.Name, tcell.ColorDefault)
+				c.chart.SetVisible(id, group == GroupProcess)
 			}
 
 			c.chart.Push(id, sample.CPU)
@@ -526,6 +529,7 @@ func (c *Collector) ingestProcesses(samples []ProcessSample) {
 		if !c.procKnown[otherSeriesID] {
 			c.procKnown[otherSeriesID] = true
 			c.chart.EnsureSeries(otherSeriesID, "other", tcell.ColorDefault)
+			c.chart.SetVisible(otherSeriesID, group == GroupProcess)
 		}
 
 		c.chart.Push(otherSeriesID, other)
@@ -537,8 +541,6 @@ func (c *Collector) ingestProcesses(samples []ProcessSample) {
 			delete(c.procKnown, id)
 		}
 	}
-
-	c.applyVisibility()
 }
 
 // ingest pushes the current metric value of every reported container
@@ -549,19 +551,24 @@ func (c *Collector) ingest(reports map[string]ContainerSample) {
 
 	sum := 0.0
 	hostBacked := c.scope == ScopeSystem && c.metric == MetricCPU && c.localHost
+	group := c.scope.resolve(c.group)
 	podSums := make(map[string]float64)
 
 	for id, sample := range reports {
-		if _, known := c.nameOf[id]; !known {
-			c.nameOf[id] = sample.Name
-		}
-
 		value := c.valueOf(sample)
 		sum += value
 
-		// infra containers have no own series but count into totals
+		// infra containers have no own series but count into totals.
+		// a new series starts with its group default visibility; user
+		// toggles made through the entity table are never overridden
+		// here, so they persist for the dialog's lifetime.
 		if !c.infraOf[id] {
-			c.chart.EnsureSeries(cntSeriesPrefix+id, c.nameOf[id], tcell.ColorDefault)
+			if _, known := c.nameOf[id]; !known {
+				c.nameOf[id] = sample.Name
+				c.chart.EnsureSeries(cntSeriesPrefix+id, sample.Name, tcell.ColorDefault)
+				c.chart.SetVisible(cntSeriesPrefix+id, group == GroupContainer)
+			}
+
 			c.chart.Push(cntSeriesPrefix+id, value)
 		}
 
@@ -569,6 +576,7 @@ func (c *Collector) ingest(reports map[string]ContainerSample) {
 			if !c.podsKnown[pod] {
 				c.podsKnown[pod] = true
 				c.chart.EnsureSeries(podSeriesPrefix+pod, pod, tcell.ColorDefault)
+				c.chart.SetVisible(podSeriesPrefix+pod, group == GroupPod && c.scope == ScopeSystem)
 			}
 
 			podSums[pod] += value
@@ -651,12 +659,28 @@ func (c *Collector) churn(ctx context.Context) {
 				delete(c.nameOf, item.ID)
 			}
 		} else {
+			// ensure the series here too: churn usually runs before the
+			// first report arrives, and a name marked known without a
+			// series would block the lazy ensure in ingest.
+			if _, known := c.nameOf[item.ID]; !known {
+				c.chart.EnsureSeries(cntSeriesPrefix+item.ID, item.Name, tcell.ColorDefault)
+				c.chart.SetVisible(cntSeriesPrefix+item.ID,
+					c.scope.resolve(c.group) == GroupContainer)
+			}
+
 			c.nameOf[item.ID] = item.Name
 		}
 
 		if item.PodName != "" {
 			c.podOf[item.ID] = item.PodName
 			presentPods[item.PodName] = true
+
+			// group default for a pod series that does not exist yet
+			// (SetVisible records the pending state safely)
+			if !c.podsKnown[item.PodName] {
+				c.chart.SetVisible(podSeriesPrefix+item.PodName,
+					c.scope.resolve(c.group) == GroupPod && c.scope == ScopeSystem)
+			}
 		} else {
 			c.podOf[item.ID] = ""
 		}
