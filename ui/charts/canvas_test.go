@@ -1,9 +1,9 @@
 package charts_test
 
 import (
+	"github.com/gdamore/tcell/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/gdamore/tcell/v2"
 
 	"github.com/containers/podman-tui/ui/charts"
 )
