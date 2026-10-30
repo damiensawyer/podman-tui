@@ -1,5 +1,10 @@
 # Load Chart — Architecture & Implementation Plan
 
+> **Status: IMPLEMENTED** (milestones 1–6 complete, branch `load_chart`).
+> 6a by-process mode · 6b entity toggle ('t') · 6c connection-loss banner.
+> All suites green (`ui/charts` 62 specs, `ui/loadchart` 10 specs, `pdcs/hoststats`),
+> `-race` clean; ui/charts is podman-import-free and type-checks on linux/windows/darwin.
+
 Live multi-series CPU/memory load chart for `podman-tui`, inspired by **lazydocker**'s stats tab and **btop**'s high-resolution multi-symbol canvas engine.
 
 Unlike lazydocker (which stacks isolated single-series charts per container), this draws **all series together on a shared canvas** with common axes, dynamic scaling, interactive entity toggling, and live legend sparklines.

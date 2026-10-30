@@ -128,27 +128,42 @@ func NewCollector(chart *Chart, scope Scope, target ScopeTarget) *Collector {
 // returned channel afterwards, and the collector keeps draining until it
 // is closed.
 func (c *Collector) SetStreamFunc(fn func(context.Context, []string, int) (<-chan SampleReport, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.streamFunc = fn
 }
 
 // SetListFunc wires the container listing source.
 func (c *Collector) SetListFunc(fn func() ([]ContainerInfo, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.listFunc = fn
 }
 
 // SetHostCPUFunc wires the host CPU sampler; nil disables host CPU
 // collection.
 func (c *Collector) SetHostCPUFunc(fn func() (float64, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.hostCPUFunc = fn
 }
 
 // SetMemTotalFunc wires the host memory total source.
 func (c *Collector) SetMemTotalFunc(fn func() (uint64, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.memTotalFunc = fn
 }
 
 // SetProcessFunc wires the process table source used by process mode.
 func (c *Collector) SetProcessFunc(fn func(ids []string) ([]ProcessSample, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.processFunc = fn
 }
 
@@ -156,6 +171,9 @@ func (c *Collector) SetProcessFunc(fn func(ids []string) ([]ProcessSample, error
 // scope CPU total series carry host samples instead of the container
 // sum.
 func (c *Collector) SetLocalHost(local bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.localHost = local
 }
 
@@ -320,7 +338,11 @@ func (c *Collector) SetMetric(metric Metric) {
 
 // fetchMemTotal reads the host memory total once per dialog.
 func (c *Collector) fetchMemTotal() {
-	total, err := c.memTotalFunc()
+	c.mu.Lock()
+	memTotalFunc := c.memTotalFunc
+	c.mu.Unlock()
+
+	total, err := memTotalFunc()
 	if err != nil {
 		log.Error().Msgf("load chart collector: memory total error: %v", err)
 
@@ -351,7 +373,11 @@ func (c *Collector) openStream(ctx context.Context, ids []string) {
 	c.cancel = streamCancel
 	c.mu.Unlock()
 
-	reportChan, err := c.streamFunc(streamCtx, ids, 1)
+	c.mu.Lock()
+	streamFunc := c.streamFunc
+	c.mu.Unlock()
+
+	reportChan, err := streamFunc(streamCtx, ids, 1)
 	if err != nil {
 		streamCancel()
 
@@ -408,7 +434,11 @@ func (c *Collector) currentIDs() []string {
 		return []string{c.target.ContainerID}
 	}
 
-	listing, err := c.listFunc()
+	c.mu.Lock()
+	listFunc := c.listFunc
+	c.mu.Unlock()
+
+	listing, err := listFunc()
 	if err != nil {
 		c.reportError(err)
 
@@ -461,6 +491,7 @@ func (c *Collector) tick(ctx context.Context) {
 func (c *Collector) pollProcessesTick() {
 	c.mu.Lock()
 	group := c.group
+	processFunc := c.processFunc
 	c.processTick++
 	tick := c.processTick
 
@@ -470,7 +501,7 @@ func (c *Collector) pollProcessesTick() {
 	}
 	c.mu.Unlock()
 
-	if group != GroupProcess || c.processFunc == nil || len(ids) == 0 {
+	if group != GroupProcess || processFunc == nil || len(ids) == 0 {
 		return
 	}
 
@@ -478,7 +509,7 @@ func (c *Collector) pollProcessesTick() {
 		return
 	}
 
-	samples, err := c.processFunc(ids)
+	samples, err := processFunc(ids)
 	if err != nil {
 		c.reportError(err)
 
@@ -629,7 +660,11 @@ func (c *Collector) sampleHostCPU() {
 // updates pod and infra knowledge, restarts the stream when the
 // container set changes and ages out disappeared entities.
 func (c *Collector) churn(ctx context.Context) {
-	listing, err := c.listFunc()
+	c.mu.Lock()
+	listFunc := c.listFunc
+	c.mu.Unlock()
+
+	listing, err := listFunc()
 	if err != nil {
 		c.reportError(err)
 
@@ -774,7 +809,11 @@ func (c *Collector) ageOut(present, presentPods map[string]bool) {
 
 // trackTarget ages out the single container scope target.
 func (c *Collector) trackTarget() {
-	listing, err := c.listFunc()
+	c.mu.Lock()
+	listFunc := c.listFunc
+	c.mu.Unlock()
+
+	listing, err := listFunc()
 	if err != nil {
 		c.reportError(err)
 
